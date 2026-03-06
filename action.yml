@@ -16,7 +16,7 @@ inputs:
   release_branch_pattern:
     description: "Regex pattern for valid release branches"
     required: false
-    default: "^release_[0-9]{4}$"
+    default: "^release_[0-9]{4,}$"
 
 runs:
   using: "composite"
