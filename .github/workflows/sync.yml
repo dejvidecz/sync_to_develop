@@ -19,9 +19,11 @@ jobs:
     steps:
       - name: Validate branch name
         shell: bash
+        env:
+          RELEASE_PATTERN: ${{ inputs.release_branch_pattern }}
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
-          if [[ ! "$BRANCH" =~ ${{ inputs.release_branch_pattern }} ]]; then
+          if [[ ! "$BRANCH" =~ $RELEASE_PATTERN ]]; then
             echo "Skipping non-release branch: $BRANCH"
             echo "SKIP=true" >> "$GITHUB_ENV"
           fi
