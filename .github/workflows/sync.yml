@@ -9,6 +9,9 @@ on:
         type: string
         default: "^release[-_]([0-9]{4}|[0-9]{8})$"
 
+permissions:
+  contents: write
+
 jobs:
   sync-release-to-develop:
     runs-on: ubuntu-latest
