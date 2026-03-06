@@ -1,0 +1,112 @@
+name: "Sync Release to Develop"
+
+on:
+  workflow_call:
+    inputs:
+      release_branch_pattern:
+        description: "Regex pattern for valid release branches"
+        required: false
+        type: string
+        default: "^release[-_]([0-9]{4}|[0-9]{8})$"
+
+jobs:
+  sync-release-to-develop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate branch name
+        shell: bash
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          if [[ ! "$BRANCH" =~ ${{ inputs.release_branch_pattern }} ]]; then
+            echo "Skipping non-release branch: $BRANCH"
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Clone and merge
+        if: env.SKIP != 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }} /tmp/repo
+          cd /tmp/repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --all
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          git checkout develop || git checkout -b develop
+          git merge "origin/$BRANCH" --no-edit
+          git push origin develop
+
+      - name: Notify Teams on failure
+        if: failure() && env.SKIP != 'true' && secrets.SYNC_TEAMS_WEBHOOK_URL != ''
+        shell: bash
+        env:
+          TEAMS_MENTION_EMAILS: ${{ secrets.SYNC_TEAMS_MENTION_EMAILS }}
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          REPO="${{ github.repository }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MENTION_TEXT=""
+          MENTION_ENTITIES="[]"
+          if [ -n "$TEAMS_MENTION_EMAILS" ]; then
+            IFS=',' read -ra EMAILS <<< "$TEAMS_MENTION_EMAILS"
+            ENTITIES=""
+            for EMAIL in "${EMAILS[@]}"; do
+              EMAIL=$(echo "$EMAIL" | xargs)
+              NAME="${EMAIL%%@*}"
+              MENTION_TEXT="$MENTION_TEXT <at>$NAME</at>"
+              ENTITY='{"type":"mention","text":"<at>'"$NAME"'</at>","mentioned":{"id":"'"$EMAIL"'","name":"'"$NAME"'"}}'
+              ENTITIES="${ENTITIES:+$ENTITIES,}$ENTITY"
+            done
+            MENTION_ENTITIES="[$ENTITIES]"
+          fi
+
+          cat <<EOF > /tmp/teams-payload.json
+          {
+            "type": "message",
+            "attachments": [{
+              "contentType": "application/vnd.microsoft.card.adaptive",
+              "content": {
+                "\$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                  {
+                    "type": "TextBlock",
+                    "text": "⚠ Auto-merge failed",
+                    "weight": "Bolder",
+                    "size": "Medium",
+                    "color": "Attention"
+                  },
+                  {
+                    "type": "FactSet",
+                    "facts": [
+                      { "title": "Project:", "value": "$REPO" },
+                      { "title": "Merge:", "value": "$BRANCH → develop" }
+                    ]
+                  },
+                  {
+                    "type": "TextBlock",
+                    "text": "Merge conflicts need to be resolved manually.$MENTION_TEXT",
+                    "wrap": true
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "Action.OpenUrl",
+                    "title": "View workflow run",
+                    "url": "$RUN_URL"
+                  }
+                ],
+                "msteams": {
+                  "entities": $MENTION_ENTITIES
+                }
+              }
+            }]
+          }
+          EOF
+
+          curl -H "Content-Type: application/json" -d @/tmp/teams-payload.json "${{ secrets.SYNC_TEAMS_WEBHOOK_URL }}"
